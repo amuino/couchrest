@@ -1,3 +1,4 @@
+require 'excon'
 module CouchRest
 
   # CouchRest Connection
@@ -38,7 +39,7 @@ module CouchRest
 
     HEADER_CONTENT_SYMBOL_MAP = {
       :content_type => 'Content-Type',
-      :accept       => 'Accept' 
+      :accept       => 'Accept'
     }
 
     DEFAULT_HEADERS = {
@@ -108,32 +109,45 @@ module CouchRest
     # Take a look at the options povided and try to apply them to the HTTP conneciton.
     # We try to maintain RestClient compatability as this is what we used before.
     def prepare_http_connection(opts)
-      @http = HTTPClient.new(opts[:proxy] || self.class.proxy)
+      options = {
+        persistent: true,
+        proxy: opts[:proxy] || self.class.proxy,
+      }
 
       # Authentication
-      unless uri.user.to_s.empty?
-        http.force_basic_auth = true
-        http.set_auth(uri.to_s, uri.user, uri.password)
-      end
+      # XXX Excon gets these from the URI
+      # unless uri.user.to_s.empty?
+      #   http.force_basic_auth = true
+      #   http.set_auth(uri.to_s, uri.user, uri.password)
+      # end
 
       # SSL Certificate option mapping
-      if opts.include?(:verify_ssl)
-        http.ssl_config.verify_mode = opts[:verify_ssl] ? OpenSSL::SSL::VERIFY_PEER : OpenSSL::SSL::VERIFY_NONE
-      end
-      http.ssl_config.client_cert = opts[:ssl_client_cert] if opts.include?(:ssl_client_cert)
-      http.ssl_config.client_key  = opts[:ssl_client_key]  if opts.include?(:ssl_client_key)
+      options[:ssl_verify_peer] = opts[:verify_ssl]      if opts.include?(:verify_ssl)
+      options[:client_cert]     = opts[:ssl_client_cert] if opts.include?(:ssl_client_cert)
+      options[:client_key]      = opts[:ssl_client_key]  if opts.include?(:ssl_client_key)
+
+      # if opts.include?(:verify_ssl)
+      #   http.ssl_config.verify_mode = opts[:verify_ssl] ? OpenSSL::SSL::VERIFY_PEER : OpenSSL::SSL::VERIFY_NONE
+      # end
+      # http.ssl_config.client_cert = opts[:ssl_client_cert] if opts.include?(:ssl_client_cert)
+      # http.ssl_config.client_key  = opts[:ssl_client_key]  if opts.include?(:ssl_client_key)
 
       # Timeout options
-      http.receive_timeout = opts[:timeout] if opts.include?(:timeout)
-      http.connect_timeout = opts[:open_timeout] if opts.include?(:open_timeout)
-      http.send_timeout    = opts[:read_timeout] if opts.include?(:read_timeout)
+      options[:connect_timeout] = opts[:open_timeout] if opts.include?(:open_timeout)
+      options[:read_timeout]    = opts[:timeout]      if opts.include?(:timeout)
+      options[:write_timeout]   = opts[:read_timeout] if opts.include?(:read_timeout)
 
-      http
+      # http.receive_timeout = opts[:timeout] if opts.include?(:timeout)
+      # http.connect_timeout = opts[:open_timeout] if opts.include?(:open_timeout)
+      # http.send_timeout    = opts[:read_timeout] if opts.include?(:read_timeout)
+
+      @http = Excon.new(uri.to_s, options)
     end
 
     def execute(method, path, options, payload = nil, &block)
       req = {
         :method => method,
+        :path   => path,
         :uri    => uri + path
       }
 
@@ -154,11 +168,12 @@ module CouchRest
     def send_and_parse_response(req, options, &block)
       if block_given?
         parser = CouchRest::StreamRowParser.new(options[:continuous] ? :feed : :array)
-        response = send_request(req) do |chunk|
+        req[:response_block] = Proc.new do |chunk|
           parser.parse(chunk) do |doc|
             block.call(parse_body(doc, options))
           end
         end
+        response = send_request(req)
         handle_response_code(response)
         parse_body(parser.header, options)
       else
@@ -169,8 +184,10 @@ module CouchRest
     end
 
     # Send request, and leave a reference to the response for debugging purposes
-    def send_request(req, &block)
-      @last_response = http.request(req.delete(:method), req.delete(:uri), req, &block)
+    def send_request(req)
+      options = req.dup
+      options[:headers] = options.delete(:header) # rename header to headers for EXCON
+      @last_response = http.request(options)
     end
 
     def handle_response_code(response)

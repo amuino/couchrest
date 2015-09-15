@@ -36,56 +36,56 @@ describe CouchRest::Connection do
 
     it "should have instantiated an HTTP connection" do
       conn = CouchRest::Connection.new(URI "http://localhost:5984")
-      expect(conn.http).to be_a(HTTPClient)
-      expect(conn.http.www_auth.basic_auth.set?).to be_false
+      expect(conn.http).to be_a(Excon::Connection)
+      expect(conn.http.data[:user]).to be_nil
     end
 
     it "should use the proxy if defined in parameters" do
       conn = CouchRest::Connection.new(URI("http://localhost:5984"), :proxy => 'http://proxy')
-      expect(conn.http.proxy.to_s).to eql('http://proxy')
+      expect(conn.http.proxy).to eql(host: 'proxy', hostname: 'proxy', path: nil, port: 80, scheme: 'http')
     end
 
     it "should use the proxy if defined in class" do
       CouchRest::Connection.proxy = 'http://proxy'
       conn = CouchRest::Connection.new(URI "http://localhost:5984")
-      expect(conn.http.proxy.to_s).to eql('http://proxy')
+      expect(conn.http.proxy).to eql(host: 'proxy', hostname: 'proxy', path: nil, port: 80, scheme: 'http')
       CouchRest::Connection.proxy = nil
-
     end
 
     it "should allow default proxy to be overwritten" do
       CouchRest::Connection.proxy = 'http://proxy'
       conn = CouchRest::Connection.new(URI("http://localhost:5984"), :proxy => 'http://proxy2')
-      expect(conn.http.proxy.to_s).to eql('http://proxy2')
+      expect(conn.http.proxy).to eql(host: 'proxy2', hostname: 'proxy2', path: nil, port: 80, scheme: 'http')
       CouchRest::Connection.proxy = nil
     end
 
     it "should pass through authentication details" do
       conn = CouchRest::Connection.new(URI "http://user:pass@mock")
-      expect(conn.http.www_auth.basic_auth.set?).to be_true
+      expect(conn.http.data[:user]).to eq 'user'
+      expect(conn.http.data[:password]).to eq 'pass'
     end
-    
+
     describe "with SSL options" do
       it "should leave the default if nothing set" do
-        default = HTTPClient.new.ssl_config.verify_mode
+        default = Excon.defaults[:ssl_verify_peer]
         conn = CouchRest::Connection.new(URI "https://localhost:5984")
-        expect(conn.http.ssl_config.verify_mode).to eql(default)
+        expect(conn.http.data[:ssl_verify_peer]).to eql(default)
       end
       it "should support disabling SSL verify mode" do
         conn = CouchRest::Connection.new(URI("https://localhost:5984"), :verify_ssl => false)
-        expect(conn.http.ssl_config.verify_mode).to eql(OpenSSL::SSL::VERIFY_NONE)
+        expect(conn.http.data[:ssl_verify_peer]).to eql(false)
       end
       it "should support enabling SSL verify mode" do
         conn = CouchRest::Connection.new(URI("https://localhost:5984"), :verify_ssl => true)
-        expect(conn.http.ssl_config.verify_mode).to eql(OpenSSL::SSL::VERIFY_PEER)
+        expect(conn.http.data[:ssl_verify_peer]).to eql(true)
       end
       it "should support setting specific cert, key, and ca" do
         conn = CouchRest::Connection.new(URI("https://localhost:5984"),
           :ssl_client_cert => 'cert',
           :ssl_client_key  => 'key',
         )
-        expect(conn.http.ssl_config.client_cert).to eql('cert')
-        expect(conn.http.ssl_config.client_key).to eql('key')
+        expect(conn.http.data[:client_cert]).to eql('cert')
+        expect(conn.http.data[:client_key]).to eql('key')
       end
 
     end
@@ -98,9 +98,9 @@ describe CouchRest::Connection do
                                          :read_timeout => 27
                                         )
 
-        expect(conn.http.receive_timeout).to eql(23)
-        expect(conn.http.connect_timeout).to eql(26)
-        expect(conn.http.send_timeout).to eql(27)
+        expect(conn.http.data[:read_timeout]).to eql(23)
+        expect(conn.http.data[:connect_timeout]).to eql(26)
+        expect(conn.http.data[:write_timeout]).to eql(27)
       end
 
     end
@@ -206,7 +206,8 @@ describe CouchRest::Connection do
         stub_request(:get, "http://user:pass@mock/db/test")
           .to_return(:body => doc.to_json)
         conn = CouchRest::Connection.new(URI "http://user:pass@mock")
-        expect(conn.http.www_auth.basic_auth.force_auth).to be_true
+        expect(conn.http.data[:user]).to eq 'user'
+        expect(conn.http.data[:password]).to eq 'pass'
         conn.get("db/test")
       end
 
